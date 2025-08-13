@@ -1,3 +1,5 @@
+#include "pk_models/one_compartment.hpp"
+
 #include <iostream>
 #include <cmath>    // For std::log
 #include <iomanip>  // for formatting string stream
@@ -24,92 +26,114 @@ struct pk_calcs {
     }
 };
 
-struct Dose { 
-    double time_h; 
-    double amount_mg; 
-};
+// Used to define the timing and quantity of each dosage for injection, oral, or other treatment.
+struct RegimenDose {double time_h, dose;};
 
-// 1-compartment, first-order elimination
-class one_compartment_pk {
+// Used for the final data.
+struct DisplayData {double time, conc;};
+
+class IrregularIVBolusRegimen{
+
 private:
     double CL_; // L/h
     double V_;  // L
 
 public:
-    one_compartment_pk(double CL, double V)
-        : CL_(CL), V_(V)
-    {
+    IrregularIVBolusRegimen(double CL, double V) : CL_(CL), V_(V) {
         if (CL_ <= 0.0) throw std::invalid_argument("CL must be > 0.");
         if (V_  <= 0.0) throw std::invalid_argument("V must be > 0.");
     }
-   
-    double conc_iv_bolus_at(double dose, double time, double ke) const {
-        return (dose / V_) * std::exp(- ke * (time)); // C(t) = (dose/V) * e^(-ke *t)
-    }
-    
-    double conc_iv_bolus_at_with_prev(double dose, double last_dose_time, double ke, double tau) {
-        return conc_iv_bolus_at(dose, last_dose_time, ke)/(1 - std::exp(- ke * tau)); // C(t) = dose/V * e^(-ke * t) / (1-e^(-ke*tau))
-    }
 
-    std::vector<double> build_c_at_times_single_bolus(double dose, std::vector<double> times) {
-        std::vector<double> c_at_times;
-        const double ke = pk_calcs::ke(CL_, V_);
-        // const double tau = 12;
+    static std::vector<RegimenDose> generate_regular_regimen(double dose, double tau, std::size_t n_doses) {
+        std::vector<RegimenDose> regimen;
+        regimen.reserve(n_doses);
         
-        for (std::size_t i = 0; i< times.size(); ++i) {
-            double c = conc_iv_bolus_at(dose, times[i], ke);
-            // double c = conc_iv_bolus_at_with_prev(dose, times[i], ke, tau);
-            c_at_times.push_back(c);
+        for (std::size_t i = 0; i<n_doses; ++i) {
+            regimen.emplace_back(tau*i, dose);
         }
 
-        return c_at_times;
+        return regimen;
     }
 
-    std::vector<double> build_c_at_times_multiple_bolus(double dose, std::vector<double> times) {
-        std::vector<double> c_at_times;
-        const double ke = pk_calcs::ke(CL_, V_);
-        // const double tau = 12;
-        
-        // double prev_c = dose / V_; // start with initial c at time 0. 
-        
-        for (std::size_t i = 0; i< times.size(); ++i) {
-            // double t_since_last = times[i] -  
-            double c = conc_iv_bolus_at(dose, times[i], ke);
+    double decay_at_t(double residual_c, double ke, double t, double t_last) { 
+        return residual_c * std::exp(-ke *(t-t_last));  // C(t)=Cr*e^(-ke*(t-tlast))
+    }
+    double bolus_at_t(double residual_c, double dose) {
+        return residual_c + dose / V_;  // C(t)=Cr + Dk / V
+    }
 
-            c_at_times.push_back(c);
-            // prev_c = c;
+    // Assumes that both vector params are already time sorted. 
+    std::vector<double> merge_times(const std::vector<RegimenDose>& regimen, const std::vector<double>& time_steps, double eps = 1e-12) {
+        std::vector<double> merged_times;
+        merged_times.reserve(regimen.size() + time_steps.size());
+        
+        // --- generated with gpt-5 --- //
+        // lambda expression with captured by reference (modify). takes parameter t of timestamp
+        auto push_if_new = [&merged_times, &eps](double t) { 
+            // if vector is empty or distance from the last append is greater than eps, push back. Otherwise skip (treat as duplicate)
+            if (merged_times.empty() || std::abs(merged_times.back() - t) > eps)
+                merged_times.push_back(t);
+        };
+
+        std::size_t si = 0, di = 0;  // indexes for steps and dose
+        while (si < time_steps.size() || di < regimen.size()) {
+            
+            // Take from steps if: doses are exhausted, OR (both present and step <= dose)
+            bool takeStep =
+                (di == regimen.size()) ||
+                (si < time_steps.size() && time_steps[si] <= regimen[di].time_h);
+
+            // push step time, advance step index
+            if (takeStep)   push_if_new(time_steps[si++]);
+            // push dose time, advance dose index
+            else            push_if_new(regimen[di++].time_h);
         }
-
-        return c_at_times;
+        
+        return merged_times;
     }
 
-    double avg_c_ss(double dose, int tau) {
-        // (dose / tau) / CL
-        return (dose / tau) / CL_;
-    }
+    // std::vector<DisplayData>
+    std::vector<double> 
+        generate_regimen_data(std::vector<RegimenDose> regimen, std::vector<double> time_steps) {
+        // Must use the times of both regimen and timesteps to generate the final DisplayData. 
+        const double ke = pk_calcs::ke(CL_, V_);
+        double C = 0.0;
 
-    double min_c_ss() {
-        // Cmaxss ​e−ke​τ
+        std::vector<double> merged_times = merge_times(regimen, time_steps); 
+        
+        return merged_times;
     }
 };
 
 // ------------------------------ Utilities ------------------------------
-std::vector<double> build_time_steps(double t_end, std::optional<double> dt) {
-    double step = dt.value_or(t_end / 200.0);
+class TimeStepBuilder {
+private:
+    double t_end;
 
-    if (t_end < 0.0)    throw std::invalid_argument("t_end must be >= 0.");
-    if (step <= 0.0)    throw std::invalid_argument("dt must be > 0.");
-    
-    const std::size_t n = static_cast<std::size_t>(std::floor(t_end / step) + 1.0); // how many multiples of dt between 0 and t_end 
-
-    std::vector<double> times; // Creates an empty dynamic array.
-    times.reserve(n); // preallocate size.
-
-    for (std::size_t i = 0; i < n; ++i) {
-        times.push_back(static_cast<double>(i) * step);
+public:
+    double get_end_time_required(double t12, std::size_t n_doses = 1) {
+        // The idea is to display 5*t12 of decay, and + 3*t12 for each dose > 1.
+        double t_end = (3.0 * (n_doses - 1) + 5.0) * t12;
+        return t_end;
     }
-    return times;
-}
+
+    std::vector<double> build_time_steps(double t_end, std::size_t steps_n = 30, std::optional<double> dt = std::nullopt) {
+        double step = dt.value_or(t_end / steps_n);
+
+        if (t_end < 0.0)    throw std::invalid_argument("t_end must be >= 0.");
+        if (step <= 0.0)    throw std::invalid_argument("dt must be > 0.");
+        
+        const std::size_t n = static_cast<std::size_t>(std::floor(t_end / step) + 1.0); // how many multiples of dt between 0 and t_end 
+
+        std::vector<double> times; // Creates an empty dynamic array.
+        times.reserve(n); // preallocate size.
+
+        for (std::size_t i = 0; i < n; ++i) {
+            times.push_back(static_cast<double>(i) * step);
+        }
+        return times;
+    }
+};
 
 double ask_dose() {
     // std::cin >> std::ws; // This causes issue of asking input before showing prompt.
@@ -129,51 +153,65 @@ double ask_dose() {
     return dose;
 }
 
+void display_single_iv_bolus(double CL, double V, double dose, std::vector<double> times) {
+    SingleIVBolus_1C model(CL, V); 
+    auto concs = model.build_c_at_times(dose, times);
 
-int main() {
-    const double CL = 3.0;
-    const double V = 30.0;
-
-    const int n_doses = 2;
-    const int tau = 12; // (h) time between doses
-
-    std::cout << "PKPD mini project\n\n";
-    std::cout << "Using CL=" << CL << " L/h, V=" << V << " L\n";
-    
-
-    double ke = pk_calcs::ke(CL, V); // h^-1
-    double t12 = pk_calcs::half_life(ke); // h
-    double t_end = 5 * t12; 
-    double dt = t_end/10; // 10 can later be changed to std::size_t plot_points optional parameter.
-
-    std::cout << std::fixed << std::setprecision(2);
-    std::cout << "Ke=" << ke << " 1/h, Half-Life=" << t12 << " h\n" << std::endl; 
-    
-    double dose = ask_dose();
-    
-    one_compartment_pk model(CL, V); 
-
-    const double avgcss = model.avg_c_ss(dose, tau);
-
-    std::cout 
-        << "The concentration at steady state is " << avgcss << " with infusions at "
-        // << ", reached after " << n_doses << " doses at " // this could be calculated later...
-        << tau << " h intervals."  << std::endl;
-
-    auto times = build_time_steps(t_end, dt);
-    auto concs = model.build_c_at_times_single_bolus(dose, times);
-
-    std::cout << "5 half-lifes of the drug, displayed at intervals of " << dt << ":"<< std::endl;
     std::cout << "\nTime (h), Conc (mg/L)\n";
 
     for (std::size_t i = 0; i < times.size(); ++i) {
         std::cout << std::setw(7) << std::setprecision(2) << std::fixed 
         << times[i] << "   " << std::setprecision(4) << concs[i] << "\n";
     }
+}
+
+// ------------------------------ main ------------------------------
+
+int main() {
+    const double CL = 3.0;
+    const double V = 30.0;
+
+    std::cout << "PKPD mini project\n\n";
+    std::cout << "Using CL=" << CL << " L/h, V=" << V << " L\n";
+
+    double ke = pk_calcs::ke(CL, V); // h^-1
+    double t12 = pk_calcs::half_life(ke); // h
+    std::cout << std::setprecision(4) << "Half-life=" << t12 << std::endl;
     
+    const std::size_t n_doses = 3;
+    const double tau = 12.0;
+
+    TimeStepBuilder tbuild;
+    double t_end = tbuild.get_end_time_required(t12, n_doses);
+    std::vector<double> time_steps = tbuild.build_time_steps(t_end);
+ 
+    double dose = ask_dose();
+    IrregularIVBolusRegimen IIVBolus(CL, V);
+    std::vector<RegimenDose> regimen = IIVBolus.generate_regular_regimen(dose, tau, n_doses);
+
+    std::vector<double> all_times = IIVBolus.generate_regimen_data(regimen, time_steps);
+
+    // /*
+    for (std::size_t i = 0; i < all_times.size(); ++i) {
+        std::cout << std::setprecision(2) << "T=" << all_times[i] << "\n";
+    }
+    // */
+
     return 0;
 }
 
+/* Example 1 compartment single IV bolus
+    double ke = pk_calcs::ke(CL, V); // h^-1
+    double t12 = pk_calcs::half_life(ke); // h
+    double t_end = 5 * t12; 
+    double dt = t_end/10; // hardcoded 10 data points to display
 
-// double c = conc_single_iv_bolus(dose, V, ke, t);
-// std::cout << "For " << dose << " mg of dose, the concentration will be " << c << " mg after " << t << " hour." << std::endl;
+    std::cout << std::fixed << std::setprecision(2);
+    std::cout << "Ke=" << ke << " 1/h, Half-Life=" << t12 << " h\n" << std::endl; 
+
+    auto times = build_time_steps(t_end, dt);
+    double dose = ask_dose();
+    std::cout << "5 half-lifes of the drug, displayed at intervals of " << dt << ":"<< std::endl;
+    display_single_iv_bolus(CL, V, dose, times);
+
+*/

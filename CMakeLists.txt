@@ -7,7 +7,10 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_executable(SimplePKPDProject main.cpp)
+add_executable(SimplePKPDProject 
+    main.cpp
+    pk_models/one_compartment.cpp
+)
 
 target_compile_features(SimplePKPDProject PRIVATE cxx_std_20)
 
