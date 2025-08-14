@@ -26,25 +26,62 @@ struct pk_calcs {
     }
 };
 
-// Used to define the timing and quantity of each dosage for injection, oral, or other treatment.
-struct RegimenDose {double time_h, dose;};
 
-// Used for the final data.
-struct DisplayData {double time, conc;};
 
-class IrregularIVBolusRegimen{
-private:
-    double CL_; // L/h
-    double V_;  // L
+// ------------------------------ Utilities ------------------------------
+struct DoseEvent {double time, dose;}; // Input
+struct TimelinePoint {double time; std::optional<double> dose;}; // output from RegimenBuilder, input for the PK classes.
+namespace RegimenBuilder {
 
-public:
-    IrregularIVBolusRegimen(double CL, double V) : CL_(CL), V_(V) {
-        if (CL_ <= 0.0) throw std::invalid_argument("CL must be > 0.");
-        if (V_  <= 0.0) throw std::invalid_argument("V must be > 0.");
+    // Assumes that both vector params are already time sorted.
+    std::vector<TimelinePoint> generate_regimen_timeline(
+        const std::vector<DoseEvent>& regimen, 
+        const std::vector<double>& time_steps, 
+        double eps = 1e-12
+    ) {
+        
+        std::vector<TimelinePoint> merged;
+        merged.reserve(regimen.size() + time_steps.size());
+
+
+        // Append a (time, dose?) pair; if same time as last (within eps), merge doses instead.
+        auto push_or_merge = [&](double t, std::optional<double> dose) {
+            if (merged.empty() || std::abs(merged.back().time - t) > eps
+                ) {
+                    merged.push_back(TimelinePoint{t, dose});
+            } else {
+                if (dose) {
+                    if (merged.back().dose) merged.back().dose = *merged.back().dose + *dose;
+                    else merged.back().dose = dose; // set dose on an existing time step
+                }
+            }
+        };
+
+        std::size_t t = 0, d = 0;
+        while (t < time_steps.size() || d < regimen.size()) {
+            
+            // take from time_steps if no more dosages or when steps<=dose 
+            bool takeTime = (
+                d == regimen.size() || 
+                (t < time_steps.size() && 
+                time_steps[t] <= regimen[d].time)
+            );
+        
+            if (takeTime) {
+                push_or_merge(time_steps[t], std::nullopt);
+                ++t;
+            } else {
+                push_or_merge(regimen[d].time, std::optional<double>(regimen[d].dose));
+                ++d;
+            }
+        }
+
+        return merged;
     }
 
-    static std::vector<RegimenDose> generate_regular_regimen(double dose, double tau, std::size_t n_doses) {
-        std::vector<RegimenDose> regimen;
+    // Generates the dosage regimen based on a static schedule of time between events (tau) and the number of doses.
+    std::vector<DoseEvent> regular_dose_regimen(double dose, double tau, std::size_t n_doses) {
+        std::vector<DoseEvent> regimen;
         regimen.reserve(n_doses);
         
         for (std::size_t i = 0; i<n_doses; ++i) {
@@ -54,101 +91,28 @@ public:
         return regimen;
     }
 
-    double decay_at_t(double residual_c, double ke, double t, double t_last) { 
-        return residual_c * std::exp(-ke *(t-t_last));  // C(t)=Cr*e^(-ke*(t-tlast))
-    }
-    double bolus_at_t(double residual_c, double dose) {
-        return residual_c + dose / V_;  // C(t)=Cr + Dk / V
-    }
-
-    // Assumes that both vector params are already time sorted. 
-    std::vector<double> merge_times(const std::vector<RegimenDose>& regimen, const std::vector<double>& time_steps, double eps = 1e-12) {
-        std::vector<double> merged_times;
-        merged_times.reserve(regimen.size() + time_steps.size());
-        
-        // --- generated with gpt-5 --- //
-        // lambda expression with captured by reference (modify). takes parameter t of timestamp
-        auto push_if_new = [&merged_times, &eps](double t) { 
-            // if vector is empty or distance from the last append is greater than eps, push back. Otherwise skip (treat as duplicate)
-            if (merged_times.empty() || std::abs(merged_times.back() - t) > eps)
-                merged_times.push_back(t);
-        };
-
-        std::size_t si = 0, di = 0;  // indexes for steps and dose
-        while (si < time_steps.size() || di < regimen.size()) {
-            
-            // Take from steps if: doses are exhausted, OR (both present and step <= dose)
-            bool takeStep =
-                (di == regimen.size()) ||
-                (si < time_steps.size() && time_steps[si] <= regimen[di].time_h);
-
-            // push step time, advance step index
-            if (takeStep)   push_if_new(time_steps[si++]);
-            // push dose time, advance dose index
-            else            push_if_new(regimen[di++].time_h);
-        }
-        
-        return merged_times;
+    // Calculates the end time of the time to display based on the half life and number of dosages.
+    // Each dose is 2*t12, while the last 5*t12 to display the decay. 
+    double end_time_by_hl_of_doses(double t12, std::size_t n_doses, double decay_mod = 5, double dose_mod = 2) {
+        return (dose_mod * (n_doses - 1) + decay_mod) * t12;
     }
 
-    // TODO: this has too many sidecases which are not assumed to occur:
-    // - doses need to be sufficiently spaced between each in the regimen.
-    // - doses cant be stacked at same time without merging beforehand.
-    std::vector<DisplayData> generate_regimen_data(std::vector<RegimenDose> regimen, std::vector<double> time_steps) {
-        const double ke = pk_calcs::ke(CL_, V_);
-        std::vector<double> times = merge_times(regimen, time_steps); 
-        
-        std::vector<DisplayData> data;
-        data.reserve(times.size());
-        
-        double C = 0;
-        std::size_t r = 0;
-        for (std::size_t i = 0; i < times.size(); ++i) {
-            double t = times[i];
-            double last_t = (i == 0) ? t : times[i-1];
-            
-            C = decay_at_t(C, ke, t, last_t);
-            last_t = t;
-        
-            if (r < regimen.size() && regimen[r].time_h == t) {
-                C = bolus_at_t(C, regimen[r].dose);
-                ++r;
-            }
-            
-            data.emplace_back(t, C);
-        }
+    std::vector<double> time_steps_by_delta(double t_end, double dt) {
+        // TODO: ask why const. 
+        const std::size_t n = static_cast<std::size_t>(std::floor(t_end / dt) + 1.0);
 
-        return data;
-    }
-};
-
-// ------------------------------ Utilities ------------------------------
-class TimeStepBuilder {
-private:
-    double t_end;
-
-public:
-    double get_end_time_required(double t12, std::size_t n_doses = 1) {
-        // The idea is to display 5*t12 of decay, and + 3*t12 for each dose > 1.
-        double t_end = (3.0 * (n_doses - 1) + 5.0) * t12;
-        return t_end;
-    }
-
-    std::vector<double> build_time_steps(double t_end, std::size_t steps_n = 30, std::optional<double> dt = std::nullopt) {
-        double step = dt.value_or(t_end / steps_n);
-
-        if (t_end < 0.0)    throw std::invalid_argument("t_end must be >= 0.");
-        if (step <= 0.0)    throw std::invalid_argument("dt must be > 0.");
-        
-        const std::size_t n = static_cast<std::size_t>(std::floor(t_end / step) + 1.0); // how many multiples of dt between 0 and t_end 
-
-        std::vector<double> times; // Creates an empty dynamic array.
-        times.reserve(n); // preallocate size.
+        std::vector<double> times;
+        times.reserve(n);
 
         for (std::size_t i = 0; i < n; ++i) {
-            times.push_back(static_cast<double>(i) * step);
+            times.push_back(static_cast<double>(i) * dt);
         }
         return times;
+    }
+
+    std::vector<double> time_steps_by_n(double t_end, std::size_t steps_n = 30) {
+        double dt = t_end / steps_n;
+        return time_steps_by_delta(t_end, dt);
     }
 };
 
@@ -182,38 +146,81 @@ void display_single_iv_bolus(double CL, double V, double dose, std::vector<doubl
     }
 }
 
+struct DisplayPoint {double time, conc;};
+class IrregularIVBolusRegimen{
+private:
+    double CL_; // L/h
+    double V_;  // L
+
+public:
+    IrregularIVBolusRegimen(double CL, double V) : CL_(CL), V_(V) {
+        if (CL_ <= 0.0) throw std::invalid_argument("CL must be > 0.");
+        if (V_  <= 0.0) throw std::invalid_argument("V must be > 0.");
+    }
+
+    double decay_at_t(double residual_c, double ke, double t, double t_last) { 
+        return residual_c * std::exp(-ke *(t-t_last));  // C(t)=Cr*e^(-ke*(t-tlast))
+    }
+    double bolus_at_t(double residual_c, double dose) {
+        return residual_c + dose / V_;  // C(t)=Cr + Dk / V
+    }
+
+
+    // TODO: this has too many sidecases which are not assumed to occur:
+    // - doses need to be sufficiently spaced between each in the regimen.
+    // - doses cant be stacked at same time without merging beforehand.
+    std::vector<DisplayPoint> multiple_iv_bolus_data(const std::vector<TimelinePoint>& time_data) {
+        const double ke = pk_calcs::ke(CL_, V_);
+        
+        std::vector<DisplayPoint> data;
+        data.reserve(time_data.size());
+        
+        double C = 0;
+        double last_t = time_data.front().time;
+        for (const auto& pt : time_data) {
+            const double t = pt.time;
+            
+            C = decay_at_t(C, ke, t, last_t);
+            last_t = t;
+            
+            if (pt.dose) C = bolus_at_t(C, pt.dose.value()); 
+
+            data.emplace_back(t, C);
+        }
+
+        return data;
+    }
+};
+
 // ------------------------------ main ------------------------------
 
 int main() {
     const double CL = 3.0;
     const double V = 30.0;
+    const std::size_t n_doses = 3;
+    const double tau = 12.0;
+    const double dose = 150; 
 
     std::cout << "PKPD mini project\n\n";
     std::cout << "Using CL=" << CL << " L/h, V=" << V << " L\n";
 
     double ke = pk_calcs::ke(CL, V); // h^-1
     double t12 = pk_calcs::half_life(ke); // h
-    std::cout << std::setprecision(4) << "Half-life=" << t12 << std::endl;
-    
-    const std::size_t n_doses = 3;
-    const double tau = 12.0;
+    std::cout << n_doses << " doses of" << dose << " mg every " << tau << " h" << std::setprecision(4) << ", half-life=" << t12 <<std::endl;
+    // double dose = ask_dose();
 
-    TimeStepBuilder tbuild;
-    double t_end = tbuild.get_end_time_required(t12, n_doses);
-    std::vector<double> time_steps = tbuild.build_time_steps(t_end);
- 
-    double dose = ask_dose();
-    IrregularIVBolusRegimen IIVBolus(CL, V);
-    std::vector<RegimenDose> regimen = IIVBolus.generate_regular_regimen(dose, tau, n_doses);
-    std::vector<DisplayData> data = IIVBolus.generate_regimen_data(regimen, time_steps);
+
+    double end_t = RegimenBuilder::end_time_by_hl_of_doses(t12, n_doses);
+    std::vector<double> time_steps = RegimenBuilder::time_steps_by_delta(end_t, 1);
+    std::vector<DoseEvent> dosage_regimen = RegimenBuilder::regular_dose_regimen(dose, tau, n_doses);
+    std::vector<TimelinePoint> timeLine = RegimenBuilder::generate_regimen_timeline(dosage_regimen, time_steps);
+
+    IrregularIVBolusRegimen iv_bolus(CL, V);
+    std::vector<DisplayPoint> data = iv_bolus.multiple_iv_bolus_data(timeLine);
 
     // /*
-    std::cout << "time (h);C (mg/L)\n";
+    std::cout << "Time (h);C (mg/L)\n";
     for (std::size_t i = 0; i < data.size(); ++i) {
-        // std::cout << "T=" << data[i].time 
-        //     << std::setprecision(3) << "\tc=" << data[i].conc 
-        //     << "\n";
-
         std::cout << data[i].time << std::setprecision(3) << ";" << data[i].conc << "\n";
     }
     // */
