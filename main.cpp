@@ -33,7 +33,6 @@ struct RegimenDose {double time_h, dose;};
 struct DisplayData {double time, conc;};
 
 class IrregularIVBolusRegimen{
-
 private:
     double CL_; // L/h
     double V_;  // L
@@ -92,16 +91,34 @@ public:
         return merged_times;
     }
 
-    // std::vector<DisplayData>
-    std::vector<double> 
-        generate_regimen_data(std::vector<RegimenDose> regimen, std::vector<double> time_steps) {
-        // Must use the times of both regimen and timesteps to generate the final DisplayData. 
+    // TODO: this has too many sidecases which are not assumed to occur:
+    // - doses need to be sufficiently spaced between each in the regimen.
+    // - doses cant be stacked at same time without merging beforehand.
+    std::vector<DisplayData> generate_regimen_data(std::vector<RegimenDose> regimen, std::vector<double> time_steps) {
         const double ke = pk_calcs::ke(CL_, V_);
-        double C = 0.0;
-
-        std::vector<double> merged_times = merge_times(regimen, time_steps); 
+        std::vector<double> times = merge_times(regimen, time_steps); 
         
-        return merged_times;
+        std::vector<DisplayData> data;
+        data.reserve(times.size());
+        
+        double C = 0;
+        std::size_t r = 0;
+        for (std::size_t i = 0; i < times.size(); ++i) {
+            double t = times[i];
+            double last_t = (i == 0) ? t : times[i-1];
+            
+            C = decay_at_t(C, ke, t, last_t);
+            last_t = t;
+        
+            if (r < regimen.size() && regimen[r].time_h == t) {
+                C = bolus_at_t(C, regimen[r].dose);
+                ++r;
+            }
+            
+            data.emplace_back(t, C);
+        }
+
+        return data;
     }
 };
 
@@ -188,12 +205,16 @@ int main() {
     double dose = ask_dose();
     IrregularIVBolusRegimen IIVBolus(CL, V);
     std::vector<RegimenDose> regimen = IIVBolus.generate_regular_regimen(dose, tau, n_doses);
-
-    std::vector<double> all_times = IIVBolus.generate_regimen_data(regimen, time_steps);
+    std::vector<DisplayData> data = IIVBolus.generate_regimen_data(regimen, time_steps);
 
     // /*
-    for (std::size_t i = 0; i < all_times.size(); ++i) {
-        std::cout << std::setprecision(2) << "T=" << all_times[i] << "\n";
+    std::cout << "time (h);C (mg/L)\n";
+    for (std::size_t i = 0; i < data.size(); ++i) {
+        // std::cout << "T=" << data[i].time 
+        //     << std::setprecision(3) << "\tc=" << data[i].conc 
+        //     << "\n";
+
+        std::cout << data[i].time << std::setprecision(3) << ";" << data[i].conc << "\n";
     }
     // */
 
