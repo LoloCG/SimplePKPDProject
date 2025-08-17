@@ -110,12 +110,11 @@ inline std::string exportutil::num_to_string(double x, int precision, bool decim
 inline bool exportutil::save_for_excel(
     const std::filesystem::path& out_path,
     const std::vector<DisplayPoint>& rows,
-    char delimiter = ';',
-    int precision = 6,
-    bool decimal_comma = true,
-    bool write_sep_hint = true,
-    bool include_header = true)
-{
+    char delimiter,
+    int precision,
+    bool decimal_comma,
+    bool write_sep_hint,
+    bool include_header) {
     // Create parent dir if provided
     std::error_code ec;
     auto parent = out_path.parent_path();

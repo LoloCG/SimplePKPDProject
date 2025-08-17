@@ -1,39 +1,9 @@
-// #include "pk_models/one_compartment.hpp"
 #include "pk_models/utils.hpp"
 
 #include <iostream>
 #include <cmath>    // For std::log
 #include <iomanip>  // for formatting string stream
 #include <vector>
-// #include <stdexcept>
-// #include <limits>   // For std::numeric_limits
-// #include <optional> 
-// #include <fstream>
-// #include <sstream>
-// #include <iomanip>
-// #include <string>
-// #include <locale>
-// #include <filesystem>
-
-struct pk_calcs {
-    // elimination constant. first order kinetics (?)
-    static double ke(double CL, double V) {return CL/V;}
-
-    static double half_life(double ke) {
-        return std::log(2.0) / ke; // t1/2 = ln(2) / ke
-    }
-
-    /// weight in kg, age in years, creatinine plasma conc. (creat_cp) in mg/dl. 
-    /// Result in ml/min. 
-    static double creatinine_cl(double age, double weight, double creat_cp, bool female = false) {
-        double creat_cp_mod = 72.0; // modifier constant for creatinine concentration in plasma
-        if (female) creat_cp_mod = 85.0;
-        
-        return ((140 - age) * weight)/ creat_cp_mod * creat_cp;
-    }
-};
-
-// ------------------------------ Utilities ------------------------------
 
 // ------------------------------ PK classes ------------------------------
 // struct DisplayPoint {double time, Ag, Ac;};
@@ -68,7 +38,7 @@ public:
         Ag += dose * F_; 
     }
 
-    double absorption_change(double delta_t) {
+    double first_order_abs_change(double delta_t) {
         return (ka_/(ka_-ke_)) * Ag *(e_exp(delta_t)-a_exp(delta_t));
     }
 
@@ -111,7 +81,9 @@ public:
             
             double Acr_decay = 0;
             if (Ac > 0) Acr_decay = first_order_decay_central(eexp);
-            const double Acr_abs = absorption_change(delta_t);
+            const double Acr_abs = first_order_abs_change(delta_t);
+            
+            std::cout << "Ag_end=" << Ag_end << ", Acr_abs="<< Acr_abs << std::endl;
 
             Ag = Ag_end;
             Ac = Acr_decay + Acr_abs;
@@ -156,6 +128,7 @@ int main() {
     CCompartment compartment(ke, ka, F);
     const std::vector<DisplayPoint> data = compartment.propagate_distribution(timeLine);
     
+    /*
     std::filesystem::path home =
     #ifdef _WIN32
         std::getenv("USERPROFILE");
@@ -164,13 +137,14 @@ int main() {
     #endif
     auto out = home / "Desktop" / "pk_output.csv";   // adjust if your Desktop is different
     exportutil::save_for_excel(out, data);
-    
-    /*
+    */
+   
+    // /*
     for (std::size_t i = 0; i < data.size(); ++i) {
         std::cout << data[i].time << ";\t" << std::setprecision(3) 
         << data[i].Ag << ";\t" << (data[i].Ac) << "\n";
     }
-    */
+    // */
 
     return 0;
 }
@@ -183,4 +157,28 @@ int main() {
 - IM/SC (solutions of small molecules): ka = 0.2–1.5
     - depends on site and formulation
 - SC biologics / long-acting depots / transdermal: slow: ka = 0.005–0.1 h−1
+
+
+
+/// weight in kg, age in years, creatinine plasma conc. (creat_cp) in mg/dl. 
+/// Result in ml/min. 
+static double creatinine_cl(double age, double weight, double creat_cp, bool female = false) {
+    double creat_cp_mod = 72.0; // modifier constant for creatinine concentration in plasma
+    if (female) creat_cp_mod = 85.0;
+    
+    return ((140 - age) * weight)/ creat_cp_mod * creat_cp;
+}
+
+Unused imports:
+// #include <stdexcept>
+// #include <limits>   // For std::numeric_limits
+// #include <optional> 
+// #include <fstream>
+// #include <sstream>
+// #include <iomanip>
+// #include <string>
+// #include <locale>
+// #include <filesystem>
+
+
 */
