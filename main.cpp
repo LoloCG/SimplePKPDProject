@@ -1,12 +1,19 @@
-#include "pk_models/one_compartment.hpp"
+// #include "pk_models/one_compartment.hpp"
+#include "pk_models/utils.hpp"
 
 #include <iostream>
 #include <cmath>    // For std::log
 #include <iomanip>  // for formatting string stream
 #include <vector>
-#include <stdexcept>
-#include <limits>   // For std::numeric_limits
-#include <optional> // For std::optional
+// #include <stdexcept>
+// #include <limits>   // For std::numeric_limits
+// #include <optional> 
+// #include <fstream>
+// #include <sstream>
+// #include <iomanip>
+// #include <string>
+// #include <locale>
+// #include <filesystem>
 
 struct pk_calcs {
     // elimination constant. first order kinetics (?)
@@ -26,220 +33,154 @@ struct pk_calcs {
     }
 };
 
-
-
 // ------------------------------ Utilities ------------------------------
-struct DoseEvent {double time, dose;}; // Input
-struct TimelinePoint {double time; std::optional<double> dose;}; // output from RegimenBuilder, input for the PK classes.
-namespace RegimenBuilder {
 
-    // Assumes that both vector params are already time sorted.
-    std::vector<TimelinePoint> generate_regimen_timeline(
-        const std::vector<DoseEvent>& regimen, 
-        const std::vector<double>& time_steps, 
-        double eps = 1e-12
-    ) {
-        
-        std::vector<TimelinePoint> merged;
-        merged.reserve(regimen.size() + time_steps.size());
-
-
-        // Append a (time, dose?) pair; if same time as last (within eps), merge doses instead.
-        auto push_or_merge = [&](double t, std::optional<double> dose) {
-            if (merged.empty() || std::abs(merged.back().time - t) > eps
-                ) {
-                    merged.push_back(TimelinePoint{t, dose});
-            } else {
-                if (dose) {
-                    if (merged.back().dose) merged.back().dose = *merged.back().dose + *dose;
-                    else merged.back().dose = dose; // set dose on an existing time step
-                }
-            }
-        };
-
-        std::size_t t = 0, d = 0;
-        while (t < time_steps.size() || d < regimen.size()) {
-            
-            // take from time_steps if no more dosages or when steps<=dose 
-            bool takeTime = (
-                d == regimen.size() || 
-                (t < time_steps.size() && 
-                time_steps[t] <= regimen[d].time)
-            );
-        
-            if (takeTime) {
-                push_or_merge(time_steps[t], std::nullopt);
-                ++t;
-            } else {
-                push_or_merge(regimen[d].time, std::optional<double>(regimen[d].dose));
-                ++d;
-            }
-        }
-
-        return merged;
-    }
-
-    // Generates the dosage regimen based on a static schedule of time between events (tau) and the number of doses.
-    std::vector<DoseEvent> regular_dose_regimen(double dose, double tau, std::size_t n_doses) {
-        std::vector<DoseEvent> regimen;
-        regimen.reserve(n_doses);
-        
-        for (std::size_t i = 0; i<n_doses; ++i) {
-            regimen.emplace_back(tau*i, dose);
-        }
-
-        return regimen;
-    }
-
-    // Calculates the end time of the time to display based on the half life and number of dosages.
-    // Each dose is 2*t12, while the last 5*t12 to display the decay. 
-    double end_time_by_hl_of_doses(double t12, std::size_t n_doses, double decay_mod = 5, double dose_mod = 2) {
-        return (dose_mod * (n_doses - 1) + decay_mod) * t12;
-    }
-
-    std::vector<double> time_steps_by_delta(double t_end, double dt) {
-        // TODO: ask why const. 
-        const std::size_t n = static_cast<std::size_t>(std::floor(t_end / dt) + 1.0);
-
-        std::vector<double> times;
-        times.reserve(n);
-
-        for (std::size_t i = 0; i < n; ++i) {
-            times.push_back(static_cast<double>(i) * dt);
-        }
-        return times;
-    }
-
-    std::vector<double> time_steps_by_n(double t_end, std::size_t steps_n = 30) {
-        double dt = t_end / steps_n;
-        return time_steps_by_delta(t_end, dt);
-    }
-};
-
-double ask_dose() {
-    // std::cin >> std::ws; // This causes issue of asking input before showing prompt.
-    
-    double dose;
-    std::cout << "Enter dose in mg: " << std::flush;
-    std::cin >> dose; 
-
-    if (std::cin.fail() || dose <= 0) {
-        std::cout << "Invalid dose. Please enter a positive number." << std::endl;
-        std::cin.clear();
-        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-        return ask_dose();
-    }
-    std::cout << std::endl;
-
-    return dose;
-}
-
-void display_single_iv_bolus(double CL, double V, double dose, std::vector<double> times) {
-    SingleIVBolus_1C model(CL, V); 
-    auto concs = model.build_c_at_times(dose, times);
-
-    std::cout << "\nTime (h), Conc (mg/L)\n";
-
-    for (std::size_t i = 0; i < times.size(); ++i) {
-        std::cout << std::setw(7) << std::setprecision(2) << std::fixed 
-        << times[i] << "   " << std::setprecision(4) << concs[i] << "\n";
-    }
-}
-
-struct DisplayPoint {double time, conc;};
-class IrregularIVBolusRegimen{
+// ------------------------------ PK classes ------------------------------
+// struct DisplayPoint {double time, Ag, Ac;};
+class CCompartment {
 private:
     double CL_; // L/h
     double V_;  // L
+    double ke_;
+    double ka_;
+    double F_; // bioavailability
+
+    double e_exp(double delta_t) {
+        return std::exp(-ke_ * delta_t);
+    }
+
+    double a_exp(double delta_t) {
+        return std::exp(-ka_ * delta_t);
+    }
 
 public:
-    IrregularIVBolusRegimen(double CL, double V) : CL_(CL), V_(V) {
-        if (CL_ <= 0.0) throw std::invalid_argument("CL must be > 0.");
-        if (V_  <= 0.0) throw std::invalid_argument("V must be > 0.");
-    }
-
-    double decay_at_t(double residual_c, double ke, double t, double t_last) { 
-        return residual_c * std::exp(-ke *(t-t_last));  // C(t)=Cr*e^(-ke*(t-tlast))
-    }
-    double bolus_at_t(double residual_c, double dose) {
-        return residual_c + dose / V_;  // C(t)=Cr + Dk / V
-    }
-
-
-    // TODO: this has too many sidecases which are not assumed to occur:
-    // - doses need to be sufficiently spaced between each in the regimen.
-    // - doses cant be stacked at same time without merging beforehand.
-    std::vector<DisplayPoint> multiple_iv_bolus_data(const std::vector<TimelinePoint>& time_data) {
-        const double ke = pk_calcs::ke(CL_, V_);
+    CCompartment(double ke, double ka, double F) : ke_(ke), ka_(ka), F_(F) {
+        if (ka <= ke_) throw std::invalid_argument("Flip-flop kinetics not added. Must have ka > ke");
         
+        Ac = 0;
+        Ag = 0;
+    }
+
+    double Ac; // state of current ammount in compartment.
+    double Ag; // state of current ammount in extravascular compartment.
+
+    void add_depot_dose(double dose) {
+        Ag += dose * F_; 
+    }
+
+    double absorption_change(double delta_t) {
+        return (ka_/(ka_-ke_)) * Ag *(e_exp(delta_t)-a_exp(delta_t));
+    }
+
+    // Returns the remaining amount of the central after applying first order decay.
+    double first_order_decay_central(double eexp) {
+        return Ac * eexp;
+    }
+
+    double first_order_decay_depot(double delta_t, double aexp){
+        return Ag * aexp;
+    }
+
+    std::vector<DisplayPoint> propagate_distribution(const std::vector<TimelinePoint>& time_data) {
         std::vector<DisplayPoint> data;
         data.reserve(time_data.size());
         
-        double C = 0;
         double last_t = time_data.front().time;
-        for (const auto& pt : time_data) {
+        
+        {
+            const auto& pt0 = time_data.front();
+            if (pt0.dose) add_depot_dose(pt0.dose.value());
+            data.emplace_back(pt0.time, Ag, Ac);
+        }
+        
+        for (size_t i = 1; i < time_data.size(); ++i) {
+            const auto& pt = time_data[i];
             const double t = pt.time;
-            
-            C = decay_at_t(C, ke, t, last_t);
-            last_t = t;
-            
-            if (pt.dose) C = bolus_at_t(C, pt.dose.value()); 
+            const double delta_t = t - last_t;
 
-            data.emplace_back(t, C);
+            if (delta_t == 0) {
+                if (pt.dose) add_depot_dose(pt.dose.value());
+                data.emplace_back(t, Ag, Ac);
+                continue;
+            }
+            
+            const double aexp = a_exp(delta_t);
+            const double eexp = e_exp(delta_t);
+
+            const double Ag_end = first_order_decay_depot(delta_t, aexp);
+            
+            double Acr_decay = 0;
+            if (Ac > 0) Acr_decay = first_order_decay_central(eexp);
+            const double Acr_abs = absorption_change(delta_t);
+
+            Ag = Ag_end;
+            Ac = Acr_decay + Acr_abs;
+            last_t = t;
+
+            if (pt.dose) add_depot_dose(pt.dose.value());
+
+            data.emplace_back(t, Ag, Ac);
         }
 
         return data;
     }
 };
 
+// ------------------------------ abstractions ------------------------------
+
 // ------------------------------ main ------------------------------
 
 int main() {
-    const double CL = 3.0;
-    const double V = 30.0;
-    const std::size_t n_doses = 3;
-    const double tau = 12.0;
-    const double dose = 150; 
+    const double t12 = 26;
+    const std::size_t n_doses = 5;
+    const double tau = 24;
+    const double dose = 50;
+    const double steps = 1; // h
+    const int F = 1;
 
     std::cout << "PKPD mini project\n\n";
-    std::cout << "Using CL=" << CL << " L/h, V=" << V << " L\n";
 
-    double ke = pk_calcs::ke(CL, V); // h^-1
-    double t12 = pk_calcs::half_life(ke); // h
-    std::cout << n_doses << " doses of" << dose << " mg every " << tau << " h" << std::setprecision(4) << ", half-life=" << t12 <<std::endl;
-    // double dose = ask_dose();
+    const double ke = std::log(2)/t12;
+    const double ka = 1;
 
+    std::cout << std::setprecision(3) << "Using half-life=" << t12 << " h, ka="
+        << ka << " 1/h, ke=" << ke << " 1/h\n" << std::setprecision(1)
+        << "Regimen of " << n_doses << " doses of " << std::setprecision(3) 
+        << dose << " mg every " << std::setprecision(1) << tau << " h." << std::endl;
 
     double end_t = RegimenBuilder::end_time_by_hl_of_doses(t12, n_doses);
-    std::vector<double> time_steps = RegimenBuilder::time_steps_by_delta(end_t, 1);
+    std::vector<double> time_steps = RegimenBuilder::time_steps_by_delta(end_t, steps);
     std::vector<DoseEvent> dosage_regimen = RegimenBuilder::regular_dose_regimen(dose, tau, n_doses);
     std::vector<TimelinePoint> timeLine = RegimenBuilder::generate_regimen_timeline(dosage_regimen, time_steps);
 
-    IrregularIVBolusRegimen iv_bolus(CL, V);
-    std::vector<DisplayPoint> data = iv_bolus.multiple_iv_bolus_data(timeLine);
-
-    // /*
-    std::cout << "Time (h);C (mg/L)\n";
+    CCompartment compartment(ke, ka, F);
+    const std::vector<DisplayPoint> data = compartment.propagate_distribution(timeLine);
+    
+    std::filesystem::path home =
+    #ifdef _WIN32
+        std::getenv("USERPROFILE");
+    #else
+        std::getenv("HOME");
+    #endif
+    auto out = home / "Desktop" / "pk_output.csv";   // adjust if your Desktop is different
+    exportutil::save_for_excel(out, data);
+    
+    /*
     for (std::size_t i = 0; i < data.size(); ++i) {
-        std::cout << data[i].time << std::setprecision(3) << ";" << data[i].conc << "\n";
+        std::cout << data[i].time << ";\t" << std::setprecision(3) 
+        << data[i].Ag << ";\t" << (data[i].Ac) << "\n";
     }
-    // */
+    */
 
     return 0;
 }
 
-/* Example 1 compartment single IV bolus
-    double ke = pk_calcs::ke(CL, V); // h^-1
-    double t12 = pk_calcs::half_life(ke); // h
-    double t_end = 5 * t12; 
-    double dt = t_end/10; // hardcoded 10 data points to display
-
-    std::cout << std::fixed << std::setprecision(2);
-    std::cout << "Ke=" << ke << " 1/h, Half-Life=" << t12 << " h\n" << std::endl; 
-
-    auto times = build_time_steps(t_end, dt);
-    double dose = ask_dose();
-    std::cout << "5 half-lifes of the drug, displayed at intervals of " << dt << ":"<< std::endl;
-    display_single_iv_bolus(CL, V, dose, times);
-
+/*
+- Oral, immediate-release (small molecules): ka = 0.5–2 
+- Oral, modified/extended-release: ka = 0.05–0.3
+    - zero order or transit models may fit better 
+- Sublingual/buccal/inhaled (fast): ka = 2–10
+- IM/SC (solutions of small molecules): ka = 0.2–1.5
+    - depends on site and formulation
+- SC biologics / long-acting depots / transdermal: slow: ka = 0.005–0.1 h−1
 */
