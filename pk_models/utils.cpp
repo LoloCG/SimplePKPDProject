@@ -7,7 +7,9 @@
 #include <locale>
 #include <fstream>
 #include <sstream>
-
+#include <iomanip>
+#include <cstring>
+#include <cerrno>
 /* ------------------------------ RegimenBuilder ------------------------------ */
 
 // Assumes that both vector params are already time sorted.
@@ -96,7 +98,7 @@ std::vector<double> RegimenBuilder::time_steps_by_n(double t_end, std::size_t st
 /* ------------------------------ exportutil ------------------------------ */
 
 // Generated with GPT-5
-inline std::string exportutil::num_to_string(double x, int precision, bool decimal_comma) {
+std::string exportutil::num_to_string(double x, int precision, bool decimal_comma) {
     std::ostringstream oss;
     oss.setf(std::ios::fixed);
     oss << std::setprecision(precision) << x;
@@ -107,7 +109,7 @@ inline std::string exportutil::num_to_string(double x, int precision, bool decim
     return s;
 }
 
-inline bool exportutil::save_for_excel(
+bool exportutil::save_for_excel(
     const std::filesystem::path& out_path,
     const std::vector<DisplayPoint>& rows,
     char delimiter,

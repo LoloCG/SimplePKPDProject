@@ -31,9 +31,9 @@ namespace RegimenBuilder{
 
 // Generated with GPT-5
 namespace exportutil {
-    inline std::string num_to_string(double x, int precision, bool decimal_comma);
+    std::string num_to_string(double x, int precision, bool decimal_comma);
 
-    inline bool save_for_excel(
+    bool save_for_excel(
         const std::filesystem::path& out_path,
         const std::vector<DisplayPoint>& rows,
         char delimiter = ';',
