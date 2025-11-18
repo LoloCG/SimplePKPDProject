@@ -20,6 +20,14 @@ double parse_double(const char* s) {
     }
 }
 
+int parse_int(const char* s) {
+    try {
+        return std::stoi(s);
+    } catch (...) {
+        throw std::runtime_error(std::string("Invalid integer: ") + s);
+    }
+}
+
 std::filesystem::path get_desktop_path(const std::string filename="pk_output.csv"){
     std::filesystem::path home =
     #ifdef _WIN32
@@ -31,45 +39,56 @@ std::filesystem::path get_desktop_path(const std::string filename="pk_output.csv
     return home / "Desktop" / filename;
 }
 
+void print_usage(const char* prog) {
+    std::cerr
+        << "Usage:\n"
+        << "  " << prog << " --dose VALUE [--t12 VALUE | --kel VALUE]\n"
+        << "                [--ka VALUE] [--ndoses N] [--tau HOURS]\n"
+        << "                [--f VALUE] [--step-size HOURS]\n"
+        << "                [--out PATH]\n\n"
+
+        << "Required:\n"
+        << "  --dose VALUE        Dose amount (double > 0).\n"
+        << "  --t12 VALUE         Half-life in hours (double > 0).\n"
+        << "     OR\n"
+        << "  --kel VALUE         Elimination rate constant in 1/h (double > 0).\n\n"
+
+        << "Optional:\n"
+        << "  --ka VALUE          Absorption rate constant ka (default 0.1).\n"
+        << "  --ndoses N          Number of doses (default 1).\n"
+        << "  --tau HOURS         Interval between doses; needed if ndoses > 1.\n"
+        << "  --f VALUE           Bioavailability F (default 1).\n"
+        << "  --step-size HOURS   Time step for simulation grid (default 1).\n"
+        << "  --out PATH          Output CSV path. If omitted, writes to Desktop.\n\n"
+
+        << "General:\n"
+        << "  --help, -h          Show this message.\n";
+}
+
+
 // ---------------------------------------- structs ----------------------------------------
 
 struct DisplayPoint {double time, Ag, Ac;};
-
 struct DoseEvent {double time, dose;};
-
 struct TimelinePoint {double time; std::optional<double> dose;};
-
-void print_usage(const char* prog) {
-    std::cerr
-        << "Usage: " << prog 
-        << "\nParameters:\n"
-        << "    Required:\n"
-        << "        `--dose VALUE`: dimensionless double. E.g. 100.0.\n"
-        << "        `--t12 VALUE | --kel VALUE`: either of both.\n"
-        << "       [--n-doses N] [--tau HOURS] [--step-size HOURS]\n"
-        << "       [--route IV|EV] [--ka VALUE] [--F VALUE]\n"
-        << "       [--end-t HOURS] [--Vd LITERS]\n"
-        << "       [--dose-unit UNIT] [--out FILE]\n";
-}
 
 struct SimParams {
     // required params
-    double dose;
-    bool has_dose = false;
-    
+    double dose;    
     double t12;
     bool has_t12 = false;
     double kel;
     bool has_kel = false;
 
     // Optional with defaults
-    double ka = 0.01;
+    double ka = 0.1;
     double f = 1;
     std::size_t n_doses = 1;
     double step_size = 1; // time
     double tau = 24.0;
 
-    std::string out_path = "pk_output.csv";
+    // std::string out_path = "pk_output.csv";
+    std::string out_path;
 };
 SimParams parse_args(int argc, char** argv) {
     SimParams p;
@@ -101,6 +120,18 @@ SimParams parse_args(int argc, char** argv) {
             need_value(arg);
             p.kel = parse_double(argv[++i]);
             p.has_kel = true;
+        } else if (arg == "--ka") {
+            need_value(arg);
+            p.ka = parse_double(argv[++i]);
+        } else if (arg == "--ndoses") {
+            need_value(arg);
+            p.n_doses = parse_int(argv[++i]);
+        } else if (arg == "--tau") {
+            need_value(arg);
+            p.tau = parse_double(argv[++i]);
+        } else if (arg == "--f") {
+            need_value(arg);
+            p.f = parse_double(argv[++i]);
         } else if (arg == "--out" || arg == "-o") {
             need_value(arg);
             p.out_path = argv[++i];
@@ -110,7 +141,7 @@ SimParams parse_args(int argc, char** argv) {
         }
     }
     
-    if (p.dose <= 0.0) {
+    if (p.dose <= 0.0 || !p.dose) {
         throw std::runtime_error("dose must be > 0");
     }
     
@@ -347,14 +378,17 @@ namespace RegimenBuilder{
     }
     
     // Calculates the end time of the time to display based on the half life and number of dosages.
-    // Each dose is 2*t12, while the last 5*t12 to display the decay. 
+    // Each dose is 2*t12, while the last 6*t12 to display the decay.
+    // TODO: this may need a different algorithm to account for multiple dosages with different tau. 
     double end_time_by_hl_of_doses(
         double t12, 
         std::size_t n_doses, 
-        double decay_mod = 5, 
+        double decay_mod = 6, 
         double dose_mod = 2
     ) {
-        return (dose_mod * (n_doses - 1) + decay_mod) * t12;
+        double end_t = (dose_mod * (n_doses - 1) + decay_mod) * t12;
+        std::cout << "end_t=" << end_t << std::endl;
+        return end_t;
     }
 
     std::vector<double> time_steps_by_delta(double t_end, double dt) {
@@ -376,10 +410,10 @@ namespace RegimenBuilder{
     }
 };
 
-// ------------------------------ main ------------------------------
+// ---------------------------------------- main ----------------------------------------
 
 std::vector<TimelinePoint> build_timepoints(const SimParams& p) {
-    double end_t = RegimenBuilder::end_time_by_hl_of_doses(p.t12+20, p.n_doses);
+    double end_t = RegimenBuilder::end_time_by_hl_of_doses(p.t12, p.n_doses);
     std::vector<double> time_steps = RegimenBuilder::time_steps_by_delta(end_t, p.step_size);
     std::vector<DoseEvent> dosage_regimen = RegimenBuilder::regular_dose_regimen(p.dose, p.tau, p.n_doses);
     std::vector<TimelinePoint> timeLine = RegimenBuilder::generate_regimen_timeline(dosage_regimen, time_steps);
@@ -396,7 +430,12 @@ int main(int argc, char *argv[]){
         CCompartment compartment(p);
         const std::vector<DisplayPoint> data = compartment.propagate_distribution(timeLine);
         
-        std::filesystem::path out = get_desktop_path();
+        std::filesystem::path out;
+        if (p.out_path.empty()) {
+            out = get_desktop_path("pk_output.csv");
+        } else {
+            out = p.out_path;
+        }
         exportutil::save_for_excel(out, data);
 
         return 0;
@@ -407,12 +446,3 @@ int main(int argc, char *argv[]){
     }
 }
 
-/*
-- Oral, immediate-release (small molecules): ka = 0.5–2 
-- Oral, modified/extended-release: ka = 0.05–0.3
-    - zero order or transit models may fit better 
-- Sublingual/buccal/inhaled (fast): ka = 2–10
-- IM/SC (solutions of small molecules): ka = 0.2–1.5
-    - depends on site and formulation
-- SC biologics / long-acting depots / transdermal: slow: ka = 0.005–0.1 h−1
-*/
