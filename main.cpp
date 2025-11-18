@@ -6,7 +6,7 @@
 #include <optional>
 #include <filesystem>
 #include <fstream> // std::ofstream
-#include <sstream> // std::ostringstream
+#include <sstream> // std::ostringstream (exportutil)
 #include <cstring>
 #include <cerrno> // std::strerror
 
@@ -64,7 +64,6 @@ void print_usage(const char* prog) {
         << "General:\n"
         << "  --help, -h          Show this message.\n";
 }
-
 
 // ---------------------------------------- structs ----------------------------------------
 
@@ -321,6 +320,36 @@ namespace exportutil {
 // ---------------------------------------- Timepoint builder ----------------------------------------
 
 namespace RegimenBuilder{
+    /// Generates the dosage regimen based on a static schedule of time between events (tau) and the number of doses.
+    std::vector<DoseEvent> regular_dose_regimen(double dose, double tau, std::size_t n_doses){
+        std::vector<DoseEvent> regimen;
+        regimen.reserve(n_doses);
+        for (std::size_t i = 0; i<n_doses; ++i) {
+            regimen.emplace_back(tau*i, dose);
+        }
+        return regimen;
+    }
+
+
+    /// Calculates the maximum time of the regimen timeline by using the 7x half-lives of last dose.
+    /// Asumes regimen of same doses at regular intervals.
+    double end_time_regular_dose_by_hl(
+        double t12, 
+        double tau,
+        std::size_t n_doses, 
+        double decay_mod = 7
+    ) {
+        double end_t;
+        if (n_doses > 1) {
+            end_t = ((n_doses-1) * tau) + decay_mod * t12;
+        } else {
+            end_t = decay_mod * t12;
+        }
+        std::cout << "calculated end_t=" << end_t << std::endl;
+        return end_t;
+    }
+
+
     // Assumes that both vector params are already time sorted.
     std::vector<TimelinePoint> generate_regimen_timeline(
         const std::vector<DoseEvent>& regimen, 
@@ -365,31 +394,6 @@ namespace RegimenBuilder{
         return merged;
     }
 
-    // Generates the dosage regimen based on a static schedule of time between events (tau) and the number of doses.
-    std::vector<DoseEvent> regular_dose_regimen(double dose, double tau, std::size_t n_doses){
-        std::vector<DoseEvent> regimen;
-        regimen.reserve(n_doses);
-        
-        for (std::size_t i = 0; i<n_doses; ++i) {
-            regimen.emplace_back(tau*i, dose);
-        }
-
-        return regimen;
-    }
-    
-    // Calculates the end time of the time to display based on the half life and number of dosages.
-    // Each dose is 2*t12, while the last 6*t12 to display the decay.
-    // TODO: this may need a different algorithm to account for multiple dosages with different tau. 
-    double end_time_by_hl_of_doses(
-        double t12, 
-        std::size_t n_doses, 
-        double decay_mod = 6, 
-        double dose_mod = 2
-    ) {
-        double end_t = (dose_mod * (n_doses - 1) + decay_mod) * t12;
-        std::cout << "end_t=" << end_t << std::endl;
-        return end_t;
-    }
 
     std::vector<double> time_steps_by_delta(double t_end, double dt) {
         const std::size_t n = static_cast<std::size_t>(std::floor(t_end / dt) + 1.0);
@@ -401,7 +405,6 @@ namespace RegimenBuilder{
             times.push_back(static_cast<double>(i) * dt);
         }
         return times;
-
     }
 
     std::vector<double> time_steps_by_n(double t_end, std::size_t steps_n = 30) {
@@ -410,10 +413,11 @@ namespace RegimenBuilder{
     }
 };
 
+
 // ---------------------------------------- main ----------------------------------------
 
 std::vector<TimelinePoint> build_timepoints(const SimParams& p) {
-    double end_t = RegimenBuilder::end_time_by_hl_of_doses(p.t12, p.n_doses);
+    double end_t = RegimenBuilder::end_time_regular_dose_by_hl(p.t12, p.tau, p.n_doses);
     std::vector<double> time_steps = RegimenBuilder::time_steps_by_delta(end_t, p.step_size);
     std::vector<DoseEvent> dosage_regimen = RegimenBuilder::regular_dose_regimen(p.dose, p.tau, p.n_doses);
     std::vector<TimelinePoint> timeLine = RegimenBuilder::generate_regimen_timeline(dosage_regimen, time_steps);
@@ -445,4 +449,3 @@ int main(int argc, char *argv[]){
         return 1;
     }
 }
-
