@@ -9,7 +9,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_executable(SimplePKPDProject 
     main.cpp
-    pk_models/utils.cpp
+    # pk_models/utils.cpp
 )
 
 target_compile_features(SimplePKPDProject PRIVATE cxx_std_20)
