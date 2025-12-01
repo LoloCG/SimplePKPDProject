@@ -85,9 +85,11 @@ struct SimParams {
     std::size_t n_doses = 1;
     double step_size = 1; // time
     double tau = 24.0;
+    
+    bool evroute = false;
 
-    // std::string out_path = "pk_output.csv";
-    std::string out_path;
+    std::string out_path = "pk_output.csv";
+    // std::string out_path;
 };
 SimParams parse_args(int argc, char** argv) {
     SimParams p;
@@ -179,11 +181,12 @@ SimParams parse_args(int argc, char** argv) {
 class CCompartment {
     // Outputs post-dose and post-propagate drug amounts
 private:
-    double CL_; // L/h
-    double V_;  // L
+    // double CL_; // L/h
+    // double V_;  // L
     double kel_;
     double ka_;
     double F_; // bioavailability
+    bool evroute_;
 
     double e_exp(double delta_t) {
         return std::exp(-kel_ * delta_t);
@@ -194,7 +197,10 @@ private:
     }
 
 public:
-    CCompartment(const SimParams& p) : kel_(p.kel), ka_(p.ka), F_(p.f) {        
+    CCompartment(const SimParams& p) : 
+        kel_(p.kel), ka_(p.ka), F_(p.f),
+        evroute_(p.evroute)
+    {        
         Ac = 0;
         Ag = 0;
     }
@@ -299,7 +305,7 @@ namespace exportutil {
             return false;
         }
 
-        if (write_sep_hint) ofs << "sep=" << delimiter << "\r\n";
+        if (write_sep_hint) ofs << "sep=" << delimiter << "\r";
         if (include_header) ofs << "time" << delimiter << "Ag" << delimiter << "Ac" << "\r";
 
         for (const auto& r : rows) {
@@ -412,7 +418,6 @@ namespace RegimenBuilder{
         return time_steps_by_delta(t_end, dt);
     }
 };
-
 
 // ---------------------------------------- main ----------------------------------------
 
