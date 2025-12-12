@@ -8,11 +8,12 @@ CSV_PATH = r"pk_output.csv"
 ARGS = [
     EXE_PATH,
     "--dose", "100",
-    "--t12", "13.86",
+    "--t12", "12",
     "--f", "1",
     "--tau", "24",
-    "--ndoses", "6",
-    "--ka", "0.10",
+    "--ndoses", "2",
+    "--ka", "0.15",
+    "--ev"
 ]
 
 def run_simulation():
@@ -35,8 +36,9 @@ def parse_csv(csv_path):
     Reads the CSV file produced by the exe.
     Adjust column names as needed.
     """
-    times = []
-    concs = []
+    times   = []
+    concs   = []
+    depot_c = []
 
     with open(csv_path, "r", encoding="utf-8") as f:
         first = f.readline().strip()
@@ -54,53 +56,35 @@ def parse_csv(csv_path):
         for row in reader:
             # Convert decimal commas → dots
             t = float(row["time"].replace(",", "."))
-            c = float(row["Ac"].replace(",", "."))   # adjust column if needed
+            d = float(row["Ag"].replace(",", "."))
+            c = float(row["Ac"].replace(",", "."))
 
             times.append(t)
+            depot_c.append(d)
             concs.append(c)
 
-    return times, concs
+    return times, concs, depot_c
 
-# def parse_csv(csv_text):
-#     """
-#     Parses CSV text into lists of time and concentration.
-#     Assumes columns are named 'time' and 'conc' in the header.
-#     """
-#     times = []
-#     concs = []
-
-#     f = io.StringIO(csv_text)
-#     print(f"f={f}")
-#     reader = csv.DictReader(f)
-#     for row in reader:
-#         print(f"row: {row}")
-#         # adjust names to match your program's header
-#         t = float(row["time"])
-#         c = float(row["Ac"])
-#         times.append(t)
-#         concs.append(c)
-
-#     return times, concs
-
-def plot_concentration_time(times, concs):
+def plot_concentration_time(times, concs, depot_c):
     plt.figure()
-    plt.plot(times, concs) # marker="o"
+    plt.plot(times, concs, label="Central")
+    plt.plot(times, depot_c, label="Depot")
     plt.xlabel("Time")
     plt.ylabel("Concentration")
     plt.title("Concentration vs Time")
     plt.grid(True)
-    plt.show()   # non-blocking
-    # plt.pause(0.001)        
+    plt.legend()
+    plt.show()
 
 
 def main():
     run_simulation()
-    times, concs = parse_csv(CSV_PATH)
+    times, concs, depot_c = parse_csv(CSV_PATH)
     
-    for c in concs:
-        print(c)
+    # for c in concs:
+        # print(c)
     
-    plot_concentration_time(times, concs)
+    plot_concentration_time(times, concs, depot_c)
 
     # input("Press Enter to exit...")
 
