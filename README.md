@@ -1,7 +1,16 @@
-Small PK/PD sandbox for learning pharmacometry basics in c++.
-**Still work in progress**
+C++ CLI pharmakokinetics One compartment (IV/EV) model.
+Used along simple python GUI with matplotlib. 
 
-Uses one-compartment model with extravascular dosing, supporting flip-flop kinetics and Tlag. 
+### Why
+Reason for creation is mostly learning purposes:
+- Learning of C++ with OOP, CMake, and related.
+- Practice of basic PK compartmental modeling.
+- Understand mathematical implications of flip-flop kinetics, tlag, etc.
 
-Inputs are currently hard-coded: t½, ka, dose mg, # doses, dosing interval, time step, F. 
-Output in desktop directoyy csv file of t vs mg in extravascular and central compartment. 
+
+### Usage
+Compiled c++ .exe accepts basic pk arguments, giving amounts in csv format (CLI printed or file format).
+Python GUI script can run .exe directly, described in EXE_PATH global var. PK arguments can be described in ARGS global variable.
+
+EV administration is selected when providing `ka` or with `--ev` argument (defaults to 0.1).
+More usage info can be obtained with `--help` or `-h` flags.
