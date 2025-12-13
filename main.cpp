@@ -88,8 +88,8 @@ struct SimParams {
     
     bool evroute = false;
 
+    bool print = false;
     std::string out_path = "pk_output.csv";
-    // std::string out_path;
 };
 SimParams parse_args(int argc, char** argv) {
     SimParams p;
@@ -137,8 +137,10 @@ SimParams parse_args(int argc, char** argv) {
             need_value(arg);
             p.f = parse_double(argv[++i]);
         } else if (arg == "--out" || arg == "-o") {
-            need_value(arg);
-            p.out_path = argv[++i];
+            p.print = true;
+            if (i + 1 >= argc) {
+                p.out_path = argv[++i];
+            }      
         } else {
             throw std::runtime_error("Unknown argument: " + arg + "\n");
             print_usage(argv[0]);
@@ -181,7 +183,6 @@ SimParams parse_args(int argc, char** argv) {
 
 // ---------------------------------------- PK classes ----------------------------------------
 
-
 class CompartmentState {
 public:
     double A;
@@ -215,7 +216,6 @@ private:
     const double collapsed_abs_change(double depot_amount, double delta_t) const {
         return depot_amount * kel_ * e_exp(delta_t) * delta_t;
     }
-
 
 public:
     OneCompModel(const SimParams& p) : 
@@ -357,7 +357,7 @@ namespace exportutil {
             std::cerr << "Write failed for " << out_path << "\n";
             return false;
         }
-        std::cout << "Wrote " << out_path << " (" << rows.size() << " rows)\n";
+        // std::cout << "Wrote " << out_path << " (" << rows.size() << " rows)\n";
         return true;
     }
 };
@@ -390,7 +390,7 @@ namespace RegimenBuilder{
         } else {
             end_t = decay_mod * t12;
         }
-        std::cout << "calculated end_t=" << end_t << std::endl;
+        std::cerr << "calculated end_t=" << end_t << std::endl;
         return end_t;
     }
 
@@ -479,20 +479,37 @@ int main(int argc, char *argv[]){
 
         std::optional<CompartmentState> depotC;  
         if (p.evroute) {
-            std::cout << "Generated Depot Compartment for EV administration." << std::endl;
+            std::cerr << "Generated Depot Compartment for EV administration." << std::endl;
             depotC.emplace("depot"); 
         }
 
         OneCompModel model(p);
         const std::vector<DisplayPoint> data = propagate_engine_one_compartment(timeLine, centralC, depotC, model);
 
-        std::filesystem::path out;
-        if (p.out_path.empty()) {
-            out = get_desktop_path("pk_output.csv");
+        if (p.print) {
+            std::cerr << "Printing to .csv file" << std::endl;
+            std::filesystem::path out;
+            if (p.out_path.empty()) {
+                out = get_desktop_path("pk_output.csv");
+            } else {
+                out = p.out_path;
+            }
+            std::cerr << "Saving to file path=" << out << std::endl;
+
+            exportutil::save_for_excel(out, data);
         } else {
-            out = p.out_path;
+            std::cout << "sep=;\n";
+            std::cout << "time;";
+            if (p.evroute) std::cout << "Ag;";
+            std::cout << "Ac\n";
+
+            std::cout << std::fixed << std::setprecision(6);
+            for (const auto& pt : data) {
+                std::cout << pt.time << ';';
+                if (p.evroute) std::cout << pt.Ag << ';';
+                std::cout << pt.Ac << '\n';
+            }
         }
-        exportutil::save_for_excel(out, data);
 
         return 0;
 

@@ -6,14 +6,15 @@ import matplotlib.pyplot as plt
 EXE_PATH = r'out\build\mainpreset\Debug\SimplePKPDProject.exe'
 CSV_PATH = r"pk_output.csv"
 ARGS = [
-    EXE_PATH,
+    EXE_PATH, 
+    # "--out", # CSV_PATH,
     "--dose", "100",
     "--t12", "12",
-    "--f", "1",
-    "--tau", "24",
-    "--ndoses", "2",
-    "--ka", "0.15",
-    "--ev"
+    # "--f", "1",
+    # "--tau", "24",
+    # "--ndoses", "2",
+    # "--ka", "0.15",
+    # "--ev"
 ]
 
 def run_simulation():
@@ -29,7 +30,11 @@ def run_simulation():
     
     print(result.stdout)
     if result.stderr:
+        print("Debug msg:")
         print(result.stderr)
+        print("-----")
+
+    return result
 
 def parse_csv(csv_path):
     """
@@ -50,7 +55,6 @@ def parse_csv(csv_path):
             delimiter = ";"
             f.seek(0)  # rewind if no sep= line
 
-        # reader = csv.DictReader(f)
         reader = csv.DictReader(f, delimiter=delimiter)
 
         for row in reader:
@@ -65,10 +69,40 @@ def parse_csv(csv_path):
 
     return times, concs, depot_c
 
-def plot_concentration_time(times, concs, depot_c):
+def read_csv_cout(csv_text):
+    f = io.StringIO(csv_text)
+    first = f.readline().strip()
+    
+    if first.lower().startswith("sep="):
+        delimiter = first.split("=", 1)[1]
+    else:
+        delimiter = ";" 
+        f.seek(0)
+
+    reader = csv.DictReader(f, delimiter=delimiter, skipinitialspace=True)
+    
+    if reader.fieldnames:
+        reader.fieldnames = [h.strip().lstrip("\ufeff") for h in reader.fieldnames]
+    has_ag = reader.fieldnames and ("Ag" in reader.fieldnames)
+
+    times, concs= [], []
+    depot_c = [] if has_ag else None
+
+    for row in reader:
+        t = float(row["time"].strip().replace(",", "."))
+        c = float(row["Ac"].strip().replace(",", "."))
+        if has_ag:
+            depot_c.append(float(row["Ag"].strip().replace(",", ".")))
+
+        times.append(t); concs.append(c)
+
+    return times, concs, depot_c
+
+def plot_concentration_time(times, concs, depot_c=None):
     plt.figure()
     plt.plot(times, concs, label="Central")
-    plt.plot(times, depot_c, label="Depot")
+    if (depot_c):
+        plt.plot(times, depot_c, label="Depot")
     plt.xlabel("Time")
     plt.ylabel("Concentration")
     plt.title("Concentration vs Time")
@@ -76,15 +110,18 @@ def plot_concentration_time(times, concs, depot_c):
     plt.legend()
     plt.show()
 
-
 def main():
-    run_simulation()
-    times, concs, depot_c = parse_csv(CSV_PATH)
-    
-    # for c in concs:
-        # print(c)
-    
+    result = run_simulation()
+
+    if ("-o" in ARGS) or ("--out" in ARGS): 
+        print("Reading .csv file output")
+        times, concs, depot_c = parse_csv(CSV_PATH)
+    else: 
+        print("Reading stdcout")
+        times, concs, depot_c = read_csv_cout(result.stdout)
+
     plot_concentration_time(times, concs, depot_c)
+    
 
     # input("Press Enter to exit...")
 
