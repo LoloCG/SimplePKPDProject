@@ -88,8 +88,8 @@ struct SimParams {
     
     bool evroute = false;
 
+    bool print = false;
     std::string out_path = "pk_output.csv";
-    // std::string out_path;
 };
 SimParams parse_args(int argc, char** argv) {
     SimParams p;
@@ -124,9 +124,12 @@ SimParams parse_args(int argc, char** argv) {
         } else if (arg == "--ka") {
             need_value(arg);
             p.ka = parse_double(argv[++i]);
+            p.evroute = true;
         } else if (arg == "--ndoses") {
             need_value(arg);
             p.n_doses = parse_int(argv[++i]);
+        } else if (arg == "--ev") {
+            p.evroute = true;
         } else if (arg == "--tau") {
             need_value(arg);
             p.tau = parse_double(argv[++i]);
@@ -134,8 +137,10 @@ SimParams parse_args(int argc, char** argv) {
             need_value(arg);
             p.f = parse_double(argv[++i]);
         } else if (arg == "--out" || arg == "-o") {
-            need_value(arg);
-            p.out_path = argv[++i];
+            p.print = true;
+            if (i + 1 >= argc) {
+                p.out_path = argv[++i];
+            }      
         } else {
             throw std::runtime_error("Unknown argument: " + arg + "\n");
             print_usage(argv[0]);
@@ -178,101 +183,135 @@ SimParams parse_args(int argc, char** argv) {
 
 // ---------------------------------------- PK classes ----------------------------------------
 
-class CCompartment {
-    // Outputs post-dose and post-propagate drug amounts
+class CompartmentState {
+public:
+    double A;
+    std::string idstr;
+
+    CompartmentState(std::string id, double a_init = 0): 
+        A(a_init), idstr(id)
+    {}
+};
+
+class OneCompModel {
 private:
-    // double CL_; // L/h
-    // double V_;  // L
     double kel_;
     double ka_;
-    double F_; // bioavailability
-    bool evroute_;
+    bool EVRoute_ = false;
+    double F_;
 
-    double e_exp(double delta_t) {
+    const double e_exp(double delta_t) const {
         return std::exp(-kel_ * delta_t);
     }
 
-    double a_exp(double delta_t) {
+    const double a_exp(double delta_t) const {
         return std::exp(-ka_ * delta_t);
     }
 
+    // net drug entering and remaining in the central at the end of the step.
+    const double absorption_term_depot(double depot_amount, double delta_t) const {
+        return depot_amount * (ka_/(ka_-kel_)) * (e_exp(delta_t)-a_exp(delta_t));
+    }
+
+    const double collapsed_abs_change(double depot_amount, double delta_t) const {
+        return depot_amount * kel_ * e_exp(delta_t) * delta_t;
+    }
+
 public:
-    CCompartment(const SimParams& p) : 
-        kel_(p.kel), ka_(p.ka), F_(p.f),
-        evroute_(p.evroute)
+    OneCompModel(const SimParams& p) : 
+        kel_(p.kel), ka_(p.ka), 
+        F_(p.f), EVRoute_(p.evroute)
     {        
-        Ac = 0;
-        Ag = 0;
     }
 
-    double Ac; // state of current ammount in compartment.
-    double Ag; // state of current ammount in extravascular compartment.
+    void step(
+        CompartmentState& central, 
+        std::optional<CompartmentState>& depot, 
+        double dt,
+        const double exp_limit = 1e-6
+    ) {
+        const double c_a_ini = central.A;
 
-    void add_depot_dose(double dose) {
-        Ag += dose * F_; 
-    }
+        // first order decay from centralC alone
+        const double eexp = e_exp(dt);
+        const double c_decay = c_a_ini * eexp;
 
-    double first_order_abs_change(double delta_t) {
-        return Ag * (ka_/(ka_-kel_)) * (e_exp(delta_t)-a_exp(delta_t));
-    }
-
-    double collapsed_abs_change(double delta_t) {
-        return Ag * kel_ * e_exp(delta_t) * delta_t;
-    }
-
-    // Returns the remaining amount of the central after applying first order decay.
-    double first_order_decay_central(double eexp) {
-        return Ac * eexp;
-    }
-
-    double first_order_decay_depot(double delta_t, double aexp){
-        return Ag * aexp;
-    }
-    
-    std::vector<DisplayPoint> propagate_distribution(const std::vector<TimelinePoint>& time_data) {
-        std::vector<DisplayPoint> data;
-        data.reserve(time_data.size());
-        
-        double last_t = time_data.front().time;
-        
-        {
-            const auto& pt0 = time_data.front();
-            if (pt0.dose) add_depot_dose(pt0.dose.value());
-            data.emplace_back(pt0.time, Ag, Ac);
+        double  d_a_ini     = 0;
+        double  d_a_final   = 0;
+        double  d_a_abs     = 0;
+        if (depot) {
+            d_a_ini=depot->A;
         }
 
-        // Dictates the threshold for (ka-ke)*dt to avoid equation collapse. 
-        const double exp_limit = 1e-6; 
-        
-        for (size_t i = 1; i < time_data.size(); ++i) {
-            const auto& pt = time_data[i];
-            const double t = pt.time;
-            const double delta_t = t - last_t;
+        if (d_a_ini > 0) {
+            // first order decay from depot alone
+            const double aexp = a_exp(dt);
+            d_a_final = d_a_ini * aexp;
 
-            const double aexp = a_exp(delta_t);
-            const double eexp = e_exp(delta_t);
+            // net drug absorption from depot
+            const double x = std::abs((ka_-kel_)*dt);
+            d_a_abs = (x < exp_limit)
+                ? collapsed_abs_change(d_a_ini, dt)
+                : absorption_term_depot(d_a_ini, dt);
 
-            const double Ag_end = first_order_decay_depot(delta_t, aexp);
-
-            const double Acr_decay = first_order_decay_central(eexp);            
-            
-            const double x = std::abs((ka_-kel_)*delta_t);
-            const double Acr_abs = (x < exp_limit)
-                ? collapsed_abs_change(delta_t)
-                : first_order_abs_change(delta_t);
-            
-            Ag = Ag_end;
-            Ac = Acr_decay + Acr_abs;
-            last_t = t;
-            
-            if (pt.dose) add_depot_dose(pt.dose.value());
-
-            data.emplace_back(t, Ag, Ac);
+            depot->A = d_a_final;
         }
 
-        return data;
+        central.A = c_decay + d_a_abs;
     }
 };
+
+// ---------------------------------------- Older classes ----------------------------------------
+
+std::vector<DisplayPoint> propagate_engine_one_compartment(
+    std::vector<TimelinePoint>& time_data,
+    CompartmentState& central,
+    std::optional<CompartmentState>& depot,
+    OneCompModel& model // not sure why cant use const, if there is no change of internal variables (ka, kel, F...)
+) { 
+    std::vector<DisplayPoint> data;
+    data.reserve(time_data.size());
+    double last_t = time_data.front().time;
+    
+    {
+        const auto& pt0 = time_data.front();
+        if (pt0.dose && depot) {
+            depot->A = pt0.dose.value();
+            data.emplace_back(pt0.time, depot->A, central.A);
+        } else if (!depot) {
+            central.A = pt0.dose.value();
+        }
+    }
+
+    // Dictates the threshold for (ka-ke)*dt to avoid equation collapse. 
+    
+    for (size_t i = 1; i < time_data.size(); ++i) {
+        const auto& pt = time_data[i];
+        const double t = pt.time;
+        const double delta_t = t - last_t;
+        
+        model.step(central, depot, delta_t); 
+
+        last_t = t;
+        
+        if (pt.dose && depot) {
+            const double last_d_a = depot->A;
+            depot->A = last_d_a + pt.dose.value();
+        } 
+        
+        // This is a shortcut that should be removed once data accepts EV and IV conditionally.
+        double depot_a;
+        if (depot) {
+            depot_a = depot->A;
+        } else {
+            depot_a = 0;
+        }
+        data.emplace_back(t, depot_a, central.A);
+    }
+
+    return data;
+}
+// ---------------------------------------- Export helper ----------------------------------------
 
 namespace exportutil {
     std::string num_to_string(double x, int precision, bool decimal_comma) {
@@ -318,7 +357,7 @@ namespace exportutil {
             std::cerr << "Write failed for " << out_path << "\n";
             return false;
         }
-        std::cout << "Wrote " << out_path << " (" << rows.size() << " rows)\n";
+        // std::cout << "Wrote " << out_path << " (" << rows.size() << " rows)\n";
         return true;
     }
 };
@@ -351,7 +390,7 @@ namespace RegimenBuilder{
         } else {
             end_t = decay_mod * t12;
         }
-        std::cout << "calculated end_t=" << end_t << std::endl;
+        std::cerr << "calculated end_t=" << end_t << std::endl;
         return end_t;
     }
 
@@ -436,16 +475,41 @@ int main(int argc, char *argv[]){
         
         std::vector<TimelinePoint> timeLine = build_timepoints(p);
 
-        CCompartment compartment(p);
-        const std::vector<DisplayPoint> data = compartment.propagate_distribution(timeLine);
-        
-        std::filesystem::path out;
-        if (p.out_path.empty()) {
-            out = get_desktop_path("pk_output.csv");
-        } else {
-            out = p.out_path;
+        CompartmentState centralC("central");
+
+        std::optional<CompartmentState> depotC;  
+        if (p.evroute) {
+            std::cerr << "Generated Depot Compartment for EV administration." << std::endl;
+            depotC.emplace("depot"); 
         }
-        exportutil::save_for_excel(out, data);
+
+        OneCompModel model(p);
+        const std::vector<DisplayPoint> data = propagate_engine_one_compartment(timeLine, centralC, depotC, model);
+
+        if (p.print) {
+            std::cerr << "Printing to .csv file" << std::endl;
+            std::filesystem::path out;
+            if (p.out_path.empty()) {
+                out = get_desktop_path("pk_output.csv");
+            } else {
+                out = p.out_path;
+            }
+            std::cerr << "Saving to file path=" << out << std::endl;
+
+            exportutil::save_for_excel(out, data);
+        } else {
+            std::cout << "sep=;\n";
+            std::cout << "time;";
+            if (p.evroute) std::cout << "Ag;";
+            std::cout << "Ac\n";
+
+            std::cout << std::fixed << std::setprecision(6);
+            for (const auto& pt : data) {
+                std::cout << pt.time << ';';
+                if (p.evroute) std::cout << pt.Ag << ';';
+                std::cout << pt.Ac << '\n';
+            }
+        }
 
         return 0;
 
@@ -454,3 +518,5 @@ int main(int argc, char *argv[]){
         return 1;
     }
 }
+
+

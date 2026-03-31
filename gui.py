@@ -6,13 +6,15 @@ import matplotlib.pyplot as plt
 EXE_PATH = r'out\build\mainpreset\Debug\SimplePKPDProject.exe'
 CSV_PATH = r"pk_output.csv"
 ARGS = [
-    EXE_PATH,
+    EXE_PATH, 
+    # "--out", # CSV_PATH,
     "--dose", "100",
-    "--t12", "13.86",
-    "--f", "1",
-    "--tau", "24",
-    "--ndoses", "6",
-    "--ka", "0.10",
+    "--t12", "12",
+    # "--f", "1",
+    # "--tau", "24",
+    # "--ndoses", "2",
+    # "--ka", "0.15",
+    # "--ev"
 ]
 
 def run_simulation():
@@ -28,15 +30,20 @@ def run_simulation():
     
     print(result.stdout)
     if result.stderr:
+        print("Debug msg:")
         print(result.stderr)
+        print("-----")
+
+    return result
 
 def parse_csv(csv_path):
     """
     Reads the CSV file produced by the exe.
     Adjust column names as needed.
     """
-    times = []
-    concs = []
+    times   = []
+    concs   = []
+    depot_c = []
 
     with open(csv_path, "r", encoding="utf-8") as f:
         first = f.readline().strip()
@@ -48,59 +55,73 @@ def parse_csv(csv_path):
             delimiter = ";"
             f.seek(0)  # rewind if no sep= line
 
-        # reader = csv.DictReader(f)
         reader = csv.DictReader(f, delimiter=delimiter)
 
         for row in reader:
             # Convert decimal commas → dots
             t = float(row["time"].replace(",", "."))
-            c = float(row["Ac"].replace(",", "."))   # adjust column if needed
+            d = float(row["Ag"].replace(",", "."))
+            c = float(row["Ac"].replace(",", "."))
 
             times.append(t)
+            depot_c.append(d)
             concs.append(c)
 
-    return times, concs
+    return times, concs, depot_c
 
-# def parse_csv(csv_text):
-#     """
-#     Parses CSV text into lists of time and concentration.
-#     Assumes columns are named 'time' and 'conc' in the header.
-#     """
-#     times = []
-#     concs = []
+def read_csv_cout(csv_text):
+    f = io.StringIO(csv_text)
+    first = f.readline().strip()
+    
+    if first.lower().startswith("sep="):
+        delimiter = first.split("=", 1)[1]
+    else:
+        delimiter = ";" 
+        f.seek(0)
 
-#     f = io.StringIO(csv_text)
-#     print(f"f={f}")
-#     reader = csv.DictReader(f)
-#     for row in reader:
-#         print(f"row: {row}")
-#         # adjust names to match your program's header
-#         t = float(row["time"])
-#         c = float(row["Ac"])
-#         times.append(t)
-#         concs.append(c)
+    reader = csv.DictReader(f, delimiter=delimiter, skipinitialspace=True)
+    
+    if reader.fieldnames:
+        reader.fieldnames = [h.strip().lstrip("\ufeff") for h in reader.fieldnames]
+    has_ag = reader.fieldnames and ("Ag" in reader.fieldnames)
 
-#     return times, concs
+    times, concs= [], []
+    depot_c = [] if has_ag else None
 
-def plot_concentration_time(times, concs):
+    for row in reader:
+        t = float(row["time"].strip().replace(",", "."))
+        c = float(row["Ac"].strip().replace(",", "."))
+        if has_ag:
+            depot_c.append(float(row["Ag"].strip().replace(",", ".")))
+
+        times.append(t); concs.append(c)
+
+    return times, concs, depot_c
+
+def plot_concentration_time(times, concs, depot_c=None):
     plt.figure()
-    plt.plot(times, concs) # marker="o"
+    plt.plot(times, concs, label="Central")
+    if (depot_c):
+        plt.plot(times, depot_c, label="Depot")
     plt.xlabel("Time")
     plt.ylabel("Concentration")
     plt.title("Concentration vs Time")
     plt.grid(True)
-    plt.show()   # non-blocking
-    # plt.pause(0.001)        
-
+    plt.legend()
+    plt.show()
 
 def main():
-    run_simulation()
-    times, concs = parse_csv(CSV_PATH)
+    result = run_simulation()
+
+    if ("-o" in ARGS) or ("--out" in ARGS): 
+        print("Reading .csv file output")
+        times, concs, depot_c = parse_csv(CSV_PATH)
+    else: 
+        print("Reading stdcout")
+        times, concs, depot_c = read_csv_cout(result.stdout)
+
+    plot_concentration_time(times, concs, depot_c)
     
-    for c in concs:
-        print(c)
-    
-    plot_concentration_time(times, concs)
 
     # input("Press Enter to exit...")
 
